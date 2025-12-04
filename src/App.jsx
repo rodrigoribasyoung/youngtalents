@@ -47,7 +47,7 @@ const db = getFirestore(app);
 // --- COMPONENTES AUXILIARES ---
 
 // Dashboard com Gráficos
-const Dashboard = ({ filteredJobs, filteredCandidates, onOpenCandidates }) => {
+const Dashboard = ({ filteredJobs, filteredCandidates, onOpenCandidatesView }) => {
   // Dados para gráficos
   const statusData = useMemo(() => {
     const counts = {};
@@ -87,8 +87,55 @@ const Dashboard = ({ filteredJobs, filteredCandidates, onOpenCandidates }) => {
     return Object.entries(origins).slice(0,5).map(([name,value])=>({name,value}));
   }, [filteredCandidates]);
 
-  const missingReturnCount = useMemo(() => {
-    return filteredCandidates.filter(c => (c.status === 'Seleção' || c.status === 'Selecionado') && !c.returnSent).length;
+  const missingReturnCandidates = useMemo(() => {
+    return filteredCandidates.filter(
+      c => (c.status === 'Seleção' || c.status === 'Selecionado') && !c.returnSent
+    );
+  }, [filteredCandidates]);
+
+  const missingReturnCount = missingReturnCandidates.length;
+
+  // Novos inscritos hoje
+  const todayNewCandidates = useMemo(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+
+    const inRange = (date) => {
+      if (!date) return false;
+      let d;
+      // Firestore Timestamp
+      if (date.seconds) {
+        d = new Date(date.seconds * 1000);
+      } else {
+        d = new Date(date);
+      }
+      return d >= start && d <= end;
+    };
+
+    return filteredCandidates.filter(c => inRange(c.createdAt));
+  }, [filteredCandidates]);
+
+  // Candidatos parados há mais de X dias na mesma etapa
+  const stuckCandidates = useMemo(() => {
+    const DAYS_THRESHOLD = 7;
+    const now = Date.now();
+
+    const toMillis = (date) => {
+      if (!date) return null;
+      if (date.seconds) return date.seconds * 1000;
+      const d = new Date(date);
+      return isNaN(d.getTime()) ? null : d.getTime();
+    };
+
+    return filteredCandidates.filter(c => {
+      if (!PIPELINE_STAGES.includes(c.status || 'Inscrito')) return false;
+      const lastUpdate = toMillis(c.updatedAt || c.createdAt);
+      if (!lastUpdate) return false;
+      const diffDays = (now - lastUpdate) / (1000 * 60 * 60 * 24);
+      return diffDays >= DAYS_THRESHOLD;
+    });
   }, [filteredCandidates]);
 
   const jobStats = {
@@ -110,22 +157,39 @@ const Dashboard = ({ filteredJobs, filteredCandidates, onOpenCandidates }) => {
       
       {/* KPIs Principais */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div onClick={() => onOpenCandidates && onOpenCandidates(filteredCandidates)} className="cursor-pointer bg-gradient-to-br from-blue-900/30 to-blue-800/10 p-6 rounded-xl border border-blue-700/30 hover:scale-[1.01] transition-transform">
+        <div
+          onClick={() => onOpenCandidatesView && onOpenCandidatesView(filteredCandidates, 'Todos os candidatos')}
+          className="cursor-pointer bg-gradient-to-br from-blue-900/30 to-blue-800/10 p-6 rounded-xl border border-blue-700/30 hover:scale-[1.01] transition-transform"
+        >
           <h3 className="text-slate-400 text-sm font-semibold">Total de Candidatos</h3>
           <p className="text-3xl font-bold text-blue-300 mt-2">{candidateStats.total}</p>
           <p className="text-xs text-slate-500 mt-1">{candidateStats.active} em processo</p>
         </div>
-        <div onClick={() => onOpenCandidates && onOpenCandidates(filteredCandidates.filter(c=>c.status==='Contratado'))} className="cursor-pointer bg-gradient-to-br from-green-900/30 to-green-800/10 p-6 rounded-xl border border-green-700/30 hover:scale-[1.01] transition-transform">
+        <div
+          onClick={() => onOpenCandidatesView && onOpenCandidatesView(filteredCandidates.filter(c=>c.status==='Contratado'), 'Candidatos contratados')}
+          className="cursor-pointer bg-gradient-to-br from-green-900/30 to-green-800/10 p-6 rounded-xl border border-green-700/30 hover:scale-[1.01] transition-transform"
+        >
           <h3 className="text-slate-400 text-sm font-semibold">Contratados</h3>
           <p className="text-3xl font-bold text-green-300 mt-2">{candidateStats.hired}</p>
           <p className="text-xs text-slate-500 mt-1">Taxa: {candidateStats.total > 0 ? ((candidateStats.hired / candidateStats.total) * 100).toFixed(1) : 0}%</p>
         </div>
-        <div onClick={() => onOpenCandidates && onOpenCandidates(filteredJobs.filter(j=>j.status==='Aberta').flatMap(j=>filteredCandidates.filter(c=>c.jobId===j.id)))} className="cursor-pointer bg-gradient-to-br from-orange-900/30 to-orange-800/10 p-6 rounded-xl border border-orange-700/30 hover:scale-[1.01] transition-transform">
+        <div
+          onClick={() => onOpenCandidatesView && onOpenCandidatesView(
+            filteredJobs
+              .filter(j=>j.status==='Aberta')
+              .flatMap(j=>filteredCandidates.filter(c=>c.jobId===j.id)),
+            'Candidatos em vagas abertas'
+          )}
+          className="cursor-pointer bg-gradient-to-br from-orange-900/30 to-orange-800/10 p-6 rounded-xl border border-orange-700/30 hover:scale-[1.01] transition-transform"
+        >
           <h3 className="text-slate-400 text-sm font-semibold">Vagas Abertas</h3>
           <p className="text-3xl font-bold text-orange-300 mt-2">{jobStats.open}</p>
           <p className="text-xs text-slate-500 mt-1">{jobStats.filled} preenchidas</p>
         </div>
-        <div onClick={() => onOpenCandidates && onOpenCandidates(filteredCandidates.filter(c=>c.status==='Reprovado'))} className="cursor-pointer bg-gradient-to-br from-red-900/30 to-red-800/10 p-6 rounded-xl border border-red-700/30 hover:scale-[1.01] transition-transform">
+        <div
+          onClick={() => onOpenCandidatesView && onOpenCandidatesView(filteredCandidates.filter(c=>c.status==='Reprovado'), 'Candidatos reprovados')}
+          className="cursor-pointer bg-gradient-to-br from-red-900/30 to-red-800/10 p-6 rounded-xl border border-red-700/30 hover:scale-[1.01] transition-transform"
+        >
           <h3 className="text-slate-400 text-sm font-semibold">Reprovados</h3>
           <p className="text-3xl font-bold text-red-300 mt-2">{candidateStats.rejected}</p>
           <p className="text-xs text-slate-500 mt-1">Taxa: {candidateStats.total > 0 ? ((candidateStats.rejected / candidateStats.total) * 100).toFixed(1) : 0}%</p>
@@ -134,10 +198,31 @@ const Dashboard = ({ filteredJobs, filteredCandidates, onOpenCandidates }) => {
       </div>
       {/* Card rápido: falta dar retorno */}
       <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div onClick={() => onOpenCandidates && onOpenCandidates(filteredCandidates.filter(c => (c.status === 'Seleção' || c.status === 'Selecionado') && !c.returnSent))} className="cursor-pointer bg-brand-card p-4 rounded-xl border border-brand-border">
+        <div
+          onClick={() => onOpenCandidatesView && onOpenCandidatesView(missingReturnCandidates, 'Candidatos sem retorno')}
+          className="cursor-pointer bg-brand-card p-4 rounded-xl border border-brand-border"
+        >
           <div className="text-slate-400 text-sm">Faltam dar retorno</div>
           <div className="text-2xl font-bold text-brand-orange mt-2">{missingReturnCount}</div>
           <div className="text-xs text-slate-500 mt-1">Candidatos selecionados sem confirmação</div>
+        </div>
+
+        <div
+          onClick={() => onOpenCandidatesView && onOpenCandidatesView(todayNewCandidates, 'Novos inscritos hoje')}
+          className="cursor-pointer bg-brand-card p-4 rounded-xl border border-brand-border"
+        >
+          <div className="text-slate-400 text-sm">Novos inscritos hoje</div>
+          <div className="text-2xl font-bold text-brand-cyan mt-2">{todayNewCandidates.length}</div>
+          <div className="text-xs text-slate-500 mt-1">Candidatos criados nas últimas 24h</div>
+        </div>
+
+        <div
+          onClick={() => onOpenCandidatesView && onOpenCandidatesView(stuckCandidates, 'Candidatos parados no funil')}
+          className="cursor-pointer bg-brand-card p-4 rounded-xl border border-brand-border"
+        >
+          <div className="text-slate-400 text-sm">Parados há 7+ dias</div>
+          <div className="text-2xl font-bold text-amber-300 mt-2">{stuckCandidates.length}</div>
+          <div className="text-xs text-slate-500 mt-1">Em etapas ativas sem movimentação recente</div>
         </div>
       </div>
 
@@ -343,6 +428,9 @@ export default function App() {
   const [marital, setMarital] = useState([]);
   const [tags, setTags] = useState([]);
 
+  // Dashboard - visão rápida de listas de candidatos
+  const [dashboardModalView, setDashboardModalView] = useState(null);
+
   // Modais
   const [isJobModalOpen, setIsJobModalOpen] = useState(false);
   const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
@@ -359,6 +447,9 @@ export default function App() {
     cnh: 'all', marital: 'all', origin: 'all', schooling: 'all'
   };
   const [filters, setFilters] = useState(initialFilters);
+
+  // Filtros rápidos adicionais (presets)
+  const [quickFilter, setQuickFilter] = useState('all'); // all, finalStages, noContact
 
   useEffect(() => { return onAuthStateChanged(auth, (u) => { setUser(u); setAuthLoading(false); }); }, []);
   const handleGoogleLogin = async () => { try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch (e) { console.error(e); } };
@@ -420,13 +511,62 @@ export default function App() {
   // Filtra candidatos baseado nos filtros da Sidebar (Avançados)
   const filteredCandidates = useMemo(() => {
     let data = [...candidates];
+
+    // Filtros avançados da sidebar (por campo)
     Object.keys(filters).forEach(key => {
        if(filters[key] !== 'all' && filters[key] !== '') {
           data = data.filter(c => c[key] === filters[key]);
        }
     });
+
+    // Filtros rápidos globais
+    if (quickFilter === 'finalStages') {
+      const finals = ['Entrevista II', 'Seleção'];
+      data = data.filter(c => finals.includes(c.status));
+    } else if (quickFilter === 'noContact') {
+      data = data.filter(c => !c.phone && !c.email);
+    }
+
     return data;
-  }, [candidates, filters]);
+  }, [candidates, filters, quickFilter]);
+
+  const handleQuickFilterChange = (value) => {
+    setQuickFilter(value);
+  };
+
+  const handleClearFilters = () => {
+    setFilters(initialFilters);
+    setQuickFilter('all');
+  };
+
+  const handleOpenDashboardCandidates = (list, title) => {
+    setDashboardModalView({
+      title,
+      candidates: list || [],
+    });
+  };
+
+  const handleCloseDashboardCandidates = () => {
+    setDashboardModalView(null);
+  };
+
+  const handleBulkStatusChange = async (candidateIds, newStage) => {
+    if (!newStage || candidateIds.length === 0) return;
+
+    try {
+      const batch = writeBatch(db);
+      candidateIds.forEach(id => {
+        batch.update(doc(db, 'candidates', id), {
+          status: newStage,
+          updatedAt: serverTimestamp()
+        });
+      });
+      await batch.commit();
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao atualizar status em massa. Tente novamente.');
+    }
+  };
 
   const optionsProps = { jobs, companies, cities, interestAreas, roles, origins, schooling, marital, tags };
 
@@ -462,10 +602,32 @@ export default function App() {
            <h2 className="text-lg font-bold text-white ml-2 lg:ml-0">
               {activeTab === 'pipeline' ? 'Pipeline de Talentos' : activeTab === 'jobs' ? 'Gestão de Vagas' : activeTab === 'candidates' ? 'Banco de Talentos' : activeTab === 'settings' ? 'Configurações' : 'Dashboard'}
            </h2>
-           <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3">
               <button onClick={() => setIsFilterSidebarOpen(true)} className="flex items-center gap-2 text-sm text-slate-400 hover:text-brand-cyan font-bold px-3 py-1.5 rounded border border-slate-700 hover:border-brand-cyan transition-colors">
                  <Filter size={16}/> Filtros Avançados
               </button>
+
+              <div className="hidden md:flex items-center gap-1 bg-brand-card border border-brand-border rounded-lg px-1 py-0.5 text-xs">
+                <button
+                  onClick={() => handleQuickFilterChange('all')}
+                  className={`px-2 py-1 rounded ${quickFilter === 'all' ? 'bg-brand-dark text-brand-cyan' : 'text-slate-400 hover:text-white'}`}
+                >
+                  Todos
+                </button>
+                <button
+                  onClick={() => handleQuickFilterChange('finalStages')}
+                  className={`px-2 py-1 rounded ${quickFilter === 'finalStages' ? 'bg-brand-dark text-brand-cyan' : 'text-slate-400 hover:text-white'}`}
+                >
+                  Etapas finais
+                </button>
+                <button
+                  onClick={() => handleQuickFilterChange('noContact')}
+                  className={`px-2 py-1 rounded ${quickFilter === 'noContact' ? 'bg-brand-dark text-brand-cyan' : 'text-slate-400 hover:text-white'}`}
+                >
+                  Sem contato
+                </button>
+              </div>
+
               <button onClick={toggleTheme} className="p-2 text-slate-400 hover:text-brand-cyan rounded border border-slate-700 hover:border-brand-cyan transition-colors">
                  {isDark ? <Sun size={18}/> : <Moon size={18}/>}
               </button>
@@ -473,15 +635,40 @@ export default function App() {
         </header>
 
         <div className="flex-1 overflow-hidden bg-brand-dark relative">
-           {activeTab === 'dashboard' && <div className="p-6 overflow-y-auto h-full"><Dashboard filteredJobs={jobs} filteredCandidates={filteredCandidates} onOpenCandidates={setDashboardModalCandidates} /></div>}
-           {activeTab === 'pipeline' && <PipelineView candidates={filteredCandidates} jobs={jobs} onDragEnd={handleDragEnd} onEdit={setEditingCandidate} onCloseStatus={handleCloseStatus} />}
+           {activeTab === 'dashboard' && (
+             <div className="p-6 overflow-y-auto h-full">
+               <Dashboard
+                 filteredJobs={jobs}
+                 filteredCandidates={filteredCandidates}
+                 onOpenCandidatesView={handleOpenDashboardCandidates}
+               />
+             </div>
+           )}
+           {activeTab === 'pipeline' && (
+             <PipelineView
+               candidates={filteredCandidates}
+               jobs={jobs}
+               onDragEnd={handleDragEnd}
+               onEdit={setEditingCandidate}
+               onCloseStatus={handleCloseStatus}
+               onBulkStatusChange={handleBulkStatusChange}
+             />
+           )}
            {activeTab === 'jobs' && <div className="p-6 overflow-y-auto h-full"><JobsList jobs={jobs} candidates={candidates} onAdd={()=>{setEditingJob({});setIsJobModalOpen(true)}} onEdit={(j)=>{setEditingJob(j);setIsJobModalOpen(true)}} onDelete={(id)=>deleteDoc(doc(db,'jobs',id))} onToggleStatus={handleSaveGeneric} onFilterPipeline={()=>{setFilters({...filters, jobId: 'mock_id'}); setActiveTab('pipeline')}} onViewCandidates={setViewingJob}/></div>}
            {activeTab === 'candidates' && <div className="p-6 overflow-y-auto h-full"><CandidatesList candidates={filteredCandidates} jobs={jobs} onAdd={()=>setEditingCandidate({})} onEdit={setEditingCandidate} onDelete={(id)=>deleteDoc(doc(db,'candidates',id))}/></div>}
            {activeTab === 'settings' && <div className="p-0 h-full"><SettingsPage {...optionsProps} onOpenCsvModal={()=>setIsCsvModalOpen(true)} /></div>}
         </div>
       </div>
 
-      <FilterSidebar isOpen={isFilterSidebarOpen} onClose={() => setIsFilterSidebarOpen(false)} filters={filters} setFilters={setFilters} clearFilters={() => setFilters(initialFilters)} options={optionsProps} candidates={candidates} />
+      <FilterSidebar
+        isOpen={isFilterSidebarOpen}
+        onClose={() => setIsFilterSidebarOpen(false)}
+        filters={filters}
+        setFilters={setFilters}
+        clearFilters={handleClearFilters}
+        options={optionsProps}
+        candidates={candidates}
+      />
 
       {/* MODAIS GLOBAIS - CORRIGIDO PASSAGEM DE PROPS */}
       {isJobModalOpen && <JobModal isOpen={isJobModalOpen} job={editingJob} onClose={() => { setIsJobModalOpen(false); setEditingJob(null); }} onSave={d => handleSaveGeneric('jobs', d, () => {setIsJobModalOpen(false); setEditingJob(null);})} options={optionsProps} isSaving={isSaving} />}
@@ -503,15 +690,20 @@ export default function App() {
       
       <CsvImportModal isOpen={isCsvModalOpen} onClose={() => setIsCsvModalOpen(false)} onImportData={(d) => handleSaveGeneric('candidates_batch', d)} />
       <JobCandidatesModal isOpen={!!viewingJob} onClose={() => setViewingJob(null)} job={viewingJob} candidates={candidates.filter(c => c.jobId === viewingJob?.id)} />
-      {dashboardModalCandidates && (
-        <JobCandidatesModal isOpen={true} onClose={() => setDashboardModalCandidates(null)} job={{ title: 'Resultados do Dashboard' }} candidates={dashboardModalCandidates} />
+      {dashboardModalView && (
+        <JobCandidatesModal
+          isOpen={true}
+          onClose={handleCloseDashboardCandidates}
+          job={{ title: dashboardModalView.title }}
+          candidates={dashboardModalView.candidates}
+        />
       )}
     </div>
   );
 }
 
 // --- PIPELINE VIEW ---
-const PipelineView = ({ candidates, jobs, onDragEnd, onEdit, onCloseStatus }) => {
+const PipelineView = ({ candidates, jobs, onDragEnd, onEdit, onCloseStatus, onBulkStatusChange }) => {
   const [viewMode, setViewMode] = useState('kanban'); 
   const [itemsPerPage, setItemsPerPage] = useState(50);
   const [selectedIds, setSelectedIds] = useState([]);
@@ -519,6 +711,7 @@ const PipelineView = ({ candidates, jobs, onDragEnd, onEdit, onCloseStatus }) =>
   const [localSearch, setLocalSearch] = useState('');
   const [localSort, setLocalSort] = useState('recent');
   const [statusFilter, setStatusFilter] = useState('active'); // active, hired, rejected
+  const [bulkStatus, setBulkStatus] = useState(PIPELINE_STAGES[0]);
 
   useEffect(() => setSelectedIds([]), [candidates]);
 
@@ -576,6 +769,44 @@ const PipelineView = ({ candidates, jobs, onDragEnd, onEdit, onCloseStatus }) =>
               </div>
            )}
         </div>
+
+        {selectedIds.length > 0 && (
+          <div className="border-t border-brand-border bg-brand-dark/80 px-6 py-3 flex flex-wrap gap-3 items-center">
+            <div className="text-xs text-slate-400">
+              {selectedIds.length} candidato{selectedIds.length > 1 ? 's' : ''} selecionado{selectedIds.length > 1 ? 's' : ''}
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-slate-400">Mudar status para:</span>
+              <select
+                className="bg-brand-card border border-brand-border rounded px-2 py-1 text-xs text-white"
+                value={bulkStatus}
+                onChange={e => setBulkStatus(e.target.value)}
+              >
+                {PIPELINE_STAGES.map(stage => (
+                  <option key={stage} value={stage}>
+                    {stage}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => {
+                  if (!onBulkStatusChange) return;
+                  onBulkStatusChange(selectedIds, bulkStatus);
+                  setSelectedIds([]);
+                }}
+                className="bg-brand-orange text-white px-3 py-1 rounded text-xs font-bold hover:bg-orange-600 flex items-center gap-1"
+              >
+                <CheckSquare size={14} /> Aplicar em massa
+              </button>
+            </div>
+            <button
+              onClick={() => setSelectedIds([])}
+              className="ml-auto text-xs text-slate-400 hover:text-white flex items-center gap-1"
+            >
+              <X size={12} /> Limpar seleção
+            </button>
+          </div>
+        )}
      </div>
   );
 };
